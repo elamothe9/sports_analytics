@@ -1,7 +1,20 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from routers import leaders
 
 app = FastAPI()
 
+# Allow Next.js frontend to call this API during development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(leaders.router, prefix="/api")
+
+
 @app.get("/")
 def root():
-    return {"message": "sports_analytics API is running"}
+    return {"message": "Analytic Overview API is running"}
