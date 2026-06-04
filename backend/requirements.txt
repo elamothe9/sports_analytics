@@ -4,3 +4,4 @@ pybaseball
 pandas
 numpy
 python-dotenv
+requests
