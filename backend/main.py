@@ -4,7 +4,6 @@ from routers import leaders
 
 app = FastAPI()
 
-# Allow Next.js frontend to call this API during development
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -13,7 +12,6 @@ app.add_middleware(
 )
 
 app.include_router(leaders.router, prefix="/api")
-
 
 @app.get("/")
 def root():
