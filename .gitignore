@@ -3,6 +3,8 @@ backend/venv/
 backend/__pycache__/
 backend/*.pyc
 backend/.env
+backend/statcast_cache.pk1
+backend/analytic_overview_props_tracker.xlsx
 
 # Next.js
 frontend/node_modules/
