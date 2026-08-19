@@ -1,0 +1,93 @@
+# Round 2 test agent — mini-swe-agent v2 config
+# Uses the DataAnnotation Anthropic proxy for the difficulty-calibration run.
+
+worker_tools:
+  model_request_timeout_seconds: 600
+  model_request_retries: 0
+
+model:
+  model_name: "anthropic/claude-sonnet-5"
+  cost_tracking: "ignore_errors"
+  model_kwargs:
+    api_base: "https://app.dataannotation.tech/api/llm_proxy/anthropic"
+    max_tokens: 64000
+    reasoning_effort: "high"
+    thinking:
+      type: "adaptive"
+    drop_params: true
+  observation_template: |
+    {%- if output.output | length < 10000 -%}
+    {
+      "returncode": {{ output.returncode }},
+      "output": {{ output.output | tojson }}
+      {%- if output.exception_info %}, "exception_info": {{ output.exception_info | tojson }}{% endif %}
+    }
+    {%- else -%}
+    {
+      "returncode": {{ output.returncode }},
+      "output_head": {{ output.output[:5000] | tojson }},
+      "output_tail": {{ output.output[-5000:] | tojson }},
+      "elided_chars": {{ output.output | length - 10000 }},
+      "warning": "Output too long."
+      {%- if output.exception_info %}, "exception_info": {{ output.exception_info | tojson }}{% endif %}
+    }
+    {%- endif -%}
+  format_error_template: |
+    Tool call error:
+
+    <error>
+    {{error}}
+    </error>
+
+    Every response needs to use the 'bash' tool at least once to execute commands.
+    Call the bash tool with your command as the argument:
+    - Tool: bash
+    - Arguments: {"command": "your_command_here"}
+
+    If you want to end the task, issue: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`
+
+environment:
+  environment_class: docker
+  cwd: "/app"
+  timeout: 60
+  # For experimental GPU/CUDA tasks, set ETALON_DOCKER_RUN_ARGS="--gpus=all".
+  run_args: []  # Override default ["--rm"] so container persists for diff extraction
+  env:
+    PAGER: cat
+    MANPAGER: cat
+    LESS: -R
+    PIP_PROGRESS_BAR: 'off'
+    TQDM_DISABLE: '1'
+
+agent:
+  system_template: |
+    You are a helpful assistant that can interact with a computer.
+  instance_template: |
+    Please solve this issue: {{task}}
+
+    You can execute bash commands and edit files to implement the necessary changes.
+
+    ## Recommended Workflow
+
+    1. Analyze the codebase by finding and reading relevant files
+    2. Create a script to reproduce the issue
+    3. Edit the source code to resolve the issue
+    4. Verify your fix works by running your script again
+    5. Test edge cases to ensure your fix is robust
+    6. Submit your changes by issuing: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`
+       Do not combine it with any other command.
+
+    ## Command Execution Rules
+
+    Each response should include:
+    1. **Reasoning text** explaining your analysis and plan
+    2. At least one bash tool call with your command
+
+    **CRITICAL REQUIREMENTS:**
+    - Your response MUST include AT LEAST ONE bash tool call
+    - Directory or environment variable changes are not persistent (new subshell each time)
+    - Prefix commands with `cd /path && ...` if you need a specific directory
+    - Submit when done: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`
+  step_limit: 250
+  cost_limit: 0
+  mode: yolo

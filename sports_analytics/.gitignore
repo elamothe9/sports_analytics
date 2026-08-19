@@ -1,0 +1,18 @@
+# Python
+backend/venv/
+__pycache__/
+*.pyc
+backend/.env
+backend/statcast_cache.pkl
+backend/analytic_overview_props_tracker.xlsx
+
+# Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+frontend/.env
+
+# General
+.DS_Store
+*.log
+
