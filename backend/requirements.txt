@@ -1,8 +1,0 @@
-fastapi
-uvicorn
-pybaseball
-pandas
-numpy
-python-dotenv
-requests
-scipy
