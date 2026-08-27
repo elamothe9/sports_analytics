@@ -17,6 +17,9 @@ from services.scoring import (
     score_park_factor,
     score_weather,
     score_bullpen,
+    score_bonuses,
+    active_bonus_list,
+    gather_bonus_inputs,
 )
 from services.weather import get_weather_for_venue
 from datetime import datetime
@@ -150,7 +153,11 @@ def prefetch_h2h_and_splits(
         key = (m["player_id"], m["pitcher_id"])
         h2h = fetch_h2h(m["player_id"], m["pitcher_id"])
         splits = fetch_splits(m["player_id"], year)
-        return key, {"h2h": h2h, "splits": splits}
+        bonus_inputs = gather_bonus_inputs(
+            m["player_id"], m["pitcher_id"],
+            m["venue"], m["batter_hand"], year,
+        )
+        return key, {"h2h": h2h, "splits": splits, "bonus_inputs": bonus_inputs}
 
     unique = {
         (m["player_id"], m["pitcher_id"]): m for m in matchups
@@ -233,6 +240,7 @@ def todays_scores():
                         weather=weather,
                         splits=pdata.get("splits"),
                         h2h=pdata.get("h2h"),
+                        **pdata.get("bonus_inputs", {}),
                         **shared,
                     )
                     result["name"] = m["batter"]["name"]
@@ -425,8 +433,30 @@ def todays_scores_fast():
                 player["h2h_note"] = \
                     "Defaulted to 50th percentile (< 6 PA)" \
                     if h2h["pa"] < 6 else None
+
+                # Situational bonuses (the board previously showed core only)
+                w = player.get("weather", {})
+                bi = gather_bonus_inputs(
+                    pid, pitcher_id, player["venue"],
+                    player["batter_hand"], datetime.now().year,
+                )
+                bonuses = score_bonuses(
+                    hit_streak=bi["hit_streak"],
+                    multi_hit_last_10=bi["multi_hit_last_10"],
+                    hr_last_3=bi["hr_last_3"],
+                    temp_f=w.get("temp_f", 72),
+                    wind_speed=w.get("wind_speed", 0),
+                    wind_direction=w.get("wind_direction", "calm"),
+                    career_avg_at_park=bi["career_avg_at_park"],
+                    park_favors_hand=bi["park_favors_hand"],
+                    pitcher_era_last_3=bi["pitcher_era_last_3"],
+                    h2h_ab=h2h.get("pa", 0),
+                    h2h_avg=h2h.get("avg", 0.0) or 0.0,
+                )
+                player["bonus_score"] = bonuses["total"]
+                player["active_bonuses"] = active_bonus_list(bonuses)
                 player["total_score"] = round(
-                    sum(player["core"].values()), 2
+                    sum(player["core"].values()) + bonuses["total"], 2
                 )
             except Exception:
                 player["total_score"] = player["pre_h2h_score"]

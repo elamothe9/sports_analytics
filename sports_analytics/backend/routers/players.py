@@ -7,6 +7,7 @@ from services.scoring import (
     fetch_h2h,
     fetch_team_map,
     score_player,
+    gather_bonus_inputs,
 )
 from services.weather import get_weather_for_venue
 from routers.scores import build_shared_data
@@ -119,6 +120,9 @@ def build_player_card(player: dict, shared: dict) -> dict:
         try:
             weather = get_weather_for_venue(matchup["venue"])
             h2h = fetch_h2h(pid, pitcher_id)
+            bonus_inputs = gather_bonus_inputs(
+                pid, pitcher_id, matchup["venue"], batter_hand, year
+            )
             result = score_player(
                 player_id=pid,
                 venue=matchup["venue"],
@@ -128,6 +132,7 @@ def build_player_card(player: dict, shared: dict) -> dict:
                 opp_team_id=matchup["opp_team_id"],
                 weather=weather,
                 h2h=h2h,
+                **bonus_inputs,
                 **shared,
             )
             card["today"] = {
@@ -143,6 +148,7 @@ def build_player_card(player: dict, shared: dict) -> dict:
                 "core_score": result["core_score"],
                 "bonus_score": result["bonus_score"],
                 "breakdown": result["breakdown"],
+                "active_bonuses": result["active_bonuses"],
                 "h2h": h2h,
                 "h2h_note": result["h2h_note"],
             }

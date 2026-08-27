@@ -30,7 +30,11 @@ from datetime import datetime
 
 # ── CONFIG ────────────────────────────────────────────────────
 BACKEND_URL  = "http://localhost:8000"
-TRACKER_PATH = "analytic_overview_props_tracker.xlsx"
+# The live tracker lives in the repo root (one level up from backend/).
+# Resolved relative to this file so it works from any working directory.
+TRACKER_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tracker4.xlsx")
+)
 TOP_N        = 15
 TODAY        = datetime.now().strftime("%Y-%m-%d")
 
@@ -48,15 +52,30 @@ def get_top_players(n: int = TOP_N) -> list:
     """Call the fast scores endpoint and return the top N players."""
     print(f"Fetching top {n} players from backend...")
     try:
+        # 10-minute timeout: on a cold Statcast cache the first call of the day
+        # can be slow while the backend downloads per-player history.
         res = requests.get(
             f"{BACKEND_URL}/api/scores/today/fast",
-            timeout=120
+            timeout=600
         )
         res.raise_for_status()
         data = res.json()
         players = data.get("top_25", [])[:n]
         print(f"  Got {len(players)} players.")
         return players
+    except requests.exceptions.Timeout:
+        print(
+            "  TIMED OUT after 10 minutes. The backend is most likely still "
+            "warming its Statcast cache on a cold start — watch the uvicorn "
+            "log for 'Caches warmed successfully.' and then run this again."
+        )
+        return []
+    except requests.exceptions.ConnectionError:
+        print(
+            "  Could not reach the backend. Start it first: "
+            "`uvicorn main:app --reload` in the backend folder."
+        )
+        return []
     except Exception as e:
         print(f"  ERROR fetching players: {e}")
         return []

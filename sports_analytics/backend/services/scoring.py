@@ -163,15 +163,20 @@ def fetch_all_10day_stats(year: int) -> list:
 
 @ttl_cache(seconds=15 * 60)
 def fetch_splits(player_id: int, year: int) -> dict:
-    """Fetch L/R splits for a batter."""
-    url = f"{MLB_API_BASE}/stats"
+    """Fetch L/R splits for a single batter.
+
+    Must use the per-person stats endpoint (/people/{id}/stats). The
+    league-wide /stats?stats=statSplits endpoint IGNORES a playerId param and
+    returns a leaderboard of many players — iterating that left every batter
+    with the same (wrong) splits. This scopes the query to one player via the
+    URL, so splits[] contains exactly that batter's vl and vr lines.
+    """
+    url = f"{MLB_API_BASE}/people/{player_id}/stats"
     params = {
         "stats": "statSplits",
         "group": "hitting",
         "season": year,
-        "playerId": player_id,
         "sitCodes": "vl,vr",
-        "sportId": 1,
     }
     res = requests.get(url, params=params)
     res.raise_for_status()
@@ -344,6 +349,55 @@ def fetch_bullpen_eras(year: int) -> dict:
 
     return bullpen_eras
 
+
+@ttl_cache(seconds=7 * 24 * 60 * 60)
+def fetch_pitcher_hands(pitcher_ids: tuple) -> dict:
+    """
+    Fetch throwing hand (L/R) for a set of pitchers in a single request.
+
+    The schedule's `probablePitcher` hydration only returns id/fullName/link —
+    it does NOT include pitchHand — so without this every starter would fall
+    through to the "R" default and be scored as right-handed. The /people
+    endpoint returns pitchHand.code per id. Cached for a week since a
+    pitcher's handedness never changes. Returns {pitcher_id: "L"|"R"}.
+    """
+    ids = ",".join(str(pid) for pid in pitcher_ids if pid)
+    if not ids:
+        return {}
+    url = f"{MLB_API_BASE}/people"
+    res = requests.get(url, params={"personIds": ids}, timeout=15)
+    res.raise_for_status()
+    return {
+        person["id"]: person.get("pitchHand", {}).get("code", "R")
+        for person in res.json().get("people", [])
+        if person.get("id") is not None
+    }
+
+
+def hydrate_pitcher_hands(probable_pitchers: list) -> None:
+    """
+    Fill real pitchHand into a list of probablePitcher dicts, in place.
+    Fully guarded — a failed /people call leaves the "R" defaults rather than
+    breaking the whole schedule fetch. No-op for entries already carrying a
+    handedness code or that are None.
+    """
+    try:
+        need = tuple(sorted({
+            p["id"]
+            for p in probable_pitchers
+            if p and p.get("id") is not None
+            and not p.get("pitchHand", {}).get("code")
+        }))
+        if not need:
+            return
+        hands = fetch_pitcher_hands(need)
+        for p in probable_pitchers:
+            if p and p.get("id") is not None and not p.get("pitchHand", {}).get("code"):
+                p["pitchHand"] = {"code": hands.get(p["id"], "R")}
+    except Exception as e:
+        print(f"Pitcher-hand hydration skipped ({e}); defaulting to R.")
+
+
 @ttl_cache(seconds=5 * 60)
 def fetch_todays_games() -> list:
     """Fetch today's schedule with probable pitchers."""
@@ -373,6 +427,14 @@ def fetch_todays_games() -> list:
                 "home_probable_pitcher": home.get("probablePitcher"),
                 "away_probable_pitcher": away.get("probablePitcher"),
             })
+
+    # The schedule API doesn't hydrate pitchHand on probablePitcher, so patch
+    # it in from /people — otherwise every pitcher is treated as right-handed.
+    hydrate_pitcher_hands([
+        p
+        for g in games
+        for p in (g["home_probable_pitcher"], g["away_probable_pitcher"])
+    ])
     return games
 
 
@@ -512,6 +574,173 @@ def score_bullpen(opp_team_id: int, all_bullpen_eras: dict) -> float:
 
 
 # ─────────────────────────────────────────────
+# Bonus data fetchers (wire up the situational bonus inputs)
+# ─────────────────────────────────────────────
+
+@ttl_cache(seconds=30 * 60)
+def fetch_batter_gamelog_bonuses(player_id: int, year: int) -> dict:
+    """
+    From a batter's season game log, derive the streak-based bonus inputs:
+      - hit_streak: current consecutive games with a hit (a hitless game only
+        breaks it if the batter actually had an at-bat — walks-only games don't)
+      - multi_hit_last_10: games with 2+ hits in the last 10 games played
+      - hr_last_3: home runs over the last 3 games played
+    """
+    try:
+        url = f"{MLB_API_BASE}/people/{player_id}/stats"
+        params = {"stats": "gameLog", "group": "hitting", "season": year}
+        res = requests.get(url, params=params, timeout=10)
+        res.raise_for_status()
+        splits = res.json().get("stats", [{}])[0].get("splits", [])
+        games = []
+        for s in splits:
+            st = s.get("stat", {})
+            games.append({
+                "date": s.get("date", ""),
+                "hits": int(st.get("hits", 0) or 0),
+                "ab": int(st.get("atBats", 0) or 0),
+                "hr": int(st.get("homeRuns", 0) or 0),
+            })
+        games.sort(key=lambda g: g["date"])  # oldest -> newest
+
+        streak = 0
+        for g in reversed(games):
+            if g["hits"] >= 1:
+                streak += 1
+            elif g["ab"] >= 1:
+                break
+            # game with no at-bat neither extends nor breaks the streak
+
+        played = [g for g in games if g["ab"] > 0]
+        multi_hit = sum(1 for g in played[-10:] if g["hits"] >= 2)
+        hr_last_3 = sum(g["hr"] for g in played[-3:])
+        return {
+            "hit_streak": streak,
+            "multi_hit_last_10": multi_hit,
+            "hr_last_3": hr_last_3,
+        }
+    except Exception as e:
+        print(f"Game-log bonus fetch failed for {player_id}: {e}")
+        return {"hit_streak": 0, "multi_hit_last_10": 0, "hr_last_3": 0}
+
+
+@ttl_cache(seconds=30 * 60)
+def fetch_pitcher_recent_era(pitcher_id: int, year: int, starts: int = 3):
+    """ERA over a starter's most recent `starts` starts (None if unavailable)."""
+    try:
+        url = f"{MLB_API_BASE}/people/{pitcher_id}/stats"
+        params = {"stats": "gameLog", "group": "pitching", "season": year}
+        res = requests.get(url, params=params, timeout=10)
+        res.raise_for_status()
+        splits = res.json().get("stats", [{}])[0].get("splits", [])
+        start_games = []
+        for s in splits:
+            st = s.get("stat", {})
+            if int(st.get("gamesStarted", 0) or 0) < 1:
+                continue
+            ip_str = str(st.get("inningsPitched", "0.0") or "0.0")
+            parts = ip_str.split(".")
+            ip = int(parts[0]) + (int(parts[1]) / 3 if len(parts) > 1 else 0)
+            start_games.append({
+                "date": s.get("date", ""),
+                "ip": ip,
+                "er": float(st.get("earnedRuns", 0) or 0),
+            })
+        if not start_games:
+            return None
+        start_games.sort(key=lambda g: g["date"])
+        recent = start_games[-starts:]
+        tot_ip = sum(g["ip"] for g in recent)
+        tot_er = sum(g["er"] for g in recent)
+        if tot_ip <= 0:
+            return None
+        return round((tot_er / tot_ip) * 9, 2)
+    except Exception as e:
+        print(f"Pitcher recent-ERA fetch failed for {pitcher_id}: {e}")
+        return None
+
+
+# Venue name -> Statcast home_team abbreviation, for career-at-park lookups.
+VENUE_TEAM_ABBR = {
+    "American Family Field": "MIL", "Angel Stadium of Anaheim": "LAA",
+    "Busch Stadium": "STL", "Chase Field": "AZ", "Citi Field": "NYM",
+    "Citizens Bank Park": "PHI", "Comerica Park": "DET", "Coors Field": "COL",
+    "Daikin Park": "HOU", "Dodger Stadium": "LAD",
+    "Ewing M. Kauffman Stadium": "KC", "Fenway Park": "BOS",
+    "Globe Life Field": "TEX", "Great American Ball Park": "CIN",
+    "Nationals Park": "WSH", "Oracle Park": "SF",
+    "Oriole Park at Camden Yards": "BAL", "PETCO Park": "SD", "PNC Park": "PIT",
+    "Progressive Field": "CLE", "Rate Field": "CWS", "Rogers Centre": "TOR",
+    "Sutter Health Park": "ATH", "T-Mobile Park": "SEA", "Target Field": "MIN",
+    "Tropicana Field": "TB", "Truist Park": "ATL", "Wrigley Field": "CHC",
+    "Yankee Stadium": "NYY", "loanDepot Park": "MIA",
+}
+
+
+def career_avg_at_park(player_id: int, venue: str):
+    """
+    Career batting average at a given ballpark, from the cached Statcast data
+    (games where home_team owns that venue). Returns None if the park can't be
+    resolved or the sample is too small (< 10 AB) to be meaningful.
+    """
+    abbr = VENUE_TEAM_ABBR.get(venue)
+    if not abbr:
+        return None
+    try:
+        df = get_statcast_batter_cached(player_id)
+        if df is None or df.empty:
+            return None
+        if "home_team" not in df.columns or "events" not in df.columns:
+            return None
+        sub = df[df["home_team"] == abbr]
+        pa_events = sub[sub["events"].notna()]
+        if pa_events.empty:
+            return None
+        hit_events = ["single", "double", "triple", "home_run"]
+        non_ab = [
+            "walk", "hit_by_pitch", "sac_fly",
+            "sac_bunt", "intent_walk", "catcher_interf",
+        ]
+        ab = pa_events[~pa_events["events"].isin(non_ab)].shape[0]
+        if ab < 10:
+            return None
+        hits = pa_events[pa_events["events"].isin(hit_events)].shape[0]
+        return round(hits / ab, 3)
+    except Exception as e:
+        print(f"career_avg_at_park failed for {player_id} @ {venue}: {e}")
+        return None
+
+
+def park_favors_hand(venue: str, batter_hand: str, threshold: float = 1.05) -> bool:
+    """True if the park's HR factor for the batter's hand is notably high."""
+    park = PARK_FACTORS.get(venue)
+    if not park:
+        return False
+    key = "lhb" if batter_hand == "L" else "rhb"
+    return park.get(key, 1.0) >= threshold
+
+
+def gather_bonus_inputs(
+    player_id: int, pitcher_id: int, venue: str,
+    batter_hand: str, year: int,
+) -> dict:
+    """
+    Collect every situational bonus input for one batter/matchup, as the
+    kwargs score_bonuses / score_player expect. Each piece is independently
+    guarded, so a single failed fetch never sinks the rest.
+    """
+    gl = fetch_batter_gamelog_bonuses(player_id, year)
+    return {
+        "hit_streak": gl["hit_streak"],
+        "multi_hit_last_10": gl["multi_hit_last_10"],
+        "hr_last_3": gl["hr_last_3"],
+        "career_avg_at_park": career_avg_at_park(player_id, venue),
+        "park_favors_hand": park_favors_hand(venue, batter_hand),
+        "pitcher_era_last_3": fetch_pitcher_recent_era(pitcher_id, year),
+    }
+
+
+# ─────────────────────────────────────────────
 # Bonus scoring
 # ─────────────────────────────────────────────
 
@@ -580,17 +809,39 @@ def score_bonuses(
     else:
         bonuses["pitcher_era"] = 0
 
-    bonuses["total"] = sum(bonuses.values())
     # Dominant H2H history — 10+ AB and .500+ BA against today's pitcher
     if h2h_ab >= 10 and h2h_avg >= 0.500:
         bonuses["dominant_h2h"] = 6
     else:
         bonuses["dominant_h2h"] = 0
 
-    # NOTE: intentionally re-sums over the interim "total" key so the
-    # published scores stay identical to the original model output.
-    bonuses["total"] = sum(bonuses.values())
+    # Sum every individual bonus exactly once. (Previously this summed twice —
+    # once before dominant_h2h and once after, over a dict that already held the
+    # interim "total" — which double-counted the seven base bonuses.)
+    bonuses["total"] = sum(v for k, v in bonuses.items() if k != "total")
     return bonuses
+
+
+# Friendly labels for surfacing which bonuses a player has "activated" today.
+BONUS_LABELS = {
+    "hit_streak":      "Hit streak",
+    "multi_hit":       "Multi-hit (L10)",
+    "hr_last_3":       "HR last 3",
+    "weather":         "Weather",
+    "career_at_park":  "Hot at park",
+    "park_hand_bonus": "Park fits hand",
+    "pitcher_era":     "Cold starter",
+    "dominant_h2h":    "Owns pitcher",
+}
+
+
+def active_bonus_list(bonuses: dict) -> list:
+    """Turn a bonuses dict into a display list of the ones that fired (>0)."""
+    return [
+        {"key": k, "label": BONUS_LABELS.get(k, k), "points": v}
+        for k, v in bonuses.items()
+        if k != "total" and isinstance(v, (int, float)) and v > 0
+    ]
 
 
 # ─────────────────────────────────────────────
@@ -675,11 +926,12 @@ def score_player(
         "core_score": core_total,
         "bonus_score": bonuses["total"],
         "total_score": round(core_total + bonuses["total"], 2),
-        "max_core": 188,
+        "max_core": 216,  # 8 core categories (includes season HR rate, 28 pts)
         "breakdown": {
             "core": core,
             "bonuses": bonuses,
         },
+        "active_bonuses": active_bonus_list(bonuses),
         "h2h_note": "Defaulted to 50th percentile (< 6 PA)" if h2h["pa"] < 6 else None,
     }
 
@@ -751,6 +1003,15 @@ def fetch_scores_for_date(date_str: str, all_season: list,
     res = requests.get(url, params=params, timeout=15)
     res.raise_for_status()
     data = res.json()
+
+    # Fill in real pitcher handedness (the schedule omits it — see
+    # fetch_todays_games) so L/R splits are scored against the correct hand.
+    hydrate_pitcher_hands([
+        team.get("probablePitcher")
+        for d in data.get("dates", [])
+        for g in d.get("games", [])
+        for team in (g["teams"]["home"], g["teams"]["away"])
+    ])
 
     all_h2h_ops = [p["ops"] for p in all_season]
     all_split_ops = [{"avg": p["avg"], "ops": p["ops"]} for p in all_season]
