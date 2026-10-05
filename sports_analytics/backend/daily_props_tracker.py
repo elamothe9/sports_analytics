@@ -33,7 +33,7 @@ BACKEND_URL  = "http://localhost:8000"
 # The live tracker lives in the repo root (one level up from backend/).
 # Resolved relative to this file so it works from any working directory.
 TRACKER_PATH = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tracker4.xlsx")
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tk.xlsx")
 )
 TOP_N        = 15
 TODAY        = datetime.now().strftime("%Y-%m-%d")

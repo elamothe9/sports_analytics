@@ -5,6 +5,8 @@ __pycache__/
 backend/.env
 backend/statcast_cache.pkl
 backend/analytic_overview_props_tracker.xlsx
+tracker4.xlsx
+tk.xlsx
 
 # Next.js
 frontend/node_modules/
@@ -15,4 +17,4 @@ frontend/.env
 # General
 .DS_Store
 *.log
-
+~$*

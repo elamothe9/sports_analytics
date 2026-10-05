@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import auth, leaders, players, scores, teams, validation
+from routers import (
+    auth, leaders, players, scores, teams, validation, history, matchups
+)
 from contextlib import asynccontextmanager
 from services.scoring import (
     fetch_all_season_stats,
@@ -13,11 +15,19 @@ from services.scoring import (
     load_cache_from_disk,
     save_cache_to_disk,
 )
+from routers.scores import compute_full_scores
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import time
 from dotenv import load_dotenv
 load_dotenv()
+
+# How often to rebuild the full board in the background so a user request is
+# almost always served from a warm cache. Kept a little under the
+# compute_full_scores TTL (360s) so the cached board never lapses between
+# refreshes.
+BOARD_REFRESH_SECONDS = 240
 
 
 def warm_caches():
@@ -72,10 +82,34 @@ def warm_caches():
 
         # Persist the Statcast cache once, after the batch completes
         save_cache_to_disk()
+
+        # Now build the full board once (real H2H, splits and bonuses for every
+        # hitter). This populates the game-log / H2H / pitcher-ERA caches AND
+        # the compute_full_scores result cache, so the first dashboard load is
+        # served warm instead of paying the whole-slate scoring cost.
+        print("Pre-building full board...")
+        compute_full_scores()
+
         print("Caches warmed successfully.")
 
     except Exception as e:
         print(f"Cache warming failed: {e}")
+
+
+def keep_board_warm():
+    """
+    Rebuild the full board on a fixed interval so the dashboard is always served
+    from a warm cache. Runs in a background daemon thread; each rebuild refreshes
+    compute_full_scores() (and any downstream caches that expired) without a user
+    ever waiting on it.
+    """
+    while True:
+        time.sleep(BOARD_REFRESH_SECONDS)
+        try:
+            compute_full_scores.cache_clear()
+            compute_full_scores()
+        except Exception as e:
+            print(f"Board refresh failed: {e}")
 
 
 @asynccontextmanager
@@ -85,6 +119,9 @@ async def lifespan(app):
     # Run cache warming in background so server starts immediately
     thread = threading.Thread(target=warm_caches, daemon=True)
     thread.start()
+    # Keep the full board hot so dashboard loads stay fast all day
+    refresher = threading.Thread(target=keep_board_warm, daemon=True)
+    refresher.start()
     yield
 
 
@@ -106,7 +143,9 @@ app.include_router(leaders.router, prefix="/api")
 app.include_router(scores.router, prefix="/api")
 app.include_router(players.router, prefix="/api")
 app.include_router(teams.router, prefix="/api")
+app.include_router(matchups.router, prefix="/api")
 app.include_router(validation.router, prefix="/api")
+app.include_router(history.router, prefix="/api")
 
 @app.get("/")
 def root():

@@ -4,18 +4,29 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
 import { useRouter } from "next/navigation"
 import {
   fetchTeamRankings,
+  fetchMatchupRankings,
   fetchTopPlayers,
+  fetchHotLeaders,
+  fetchHistory,
   searchPlayers,
+  invalidateDashboardCache,
   type FastScoresResponse,
   type SearchResponse,
   type TeamRankingsResponse,
+  type MatchupRankingsResponse,
+  type HotLeadersResponse,
+  type HistoryResponse,
 } from "../lib/api"
 import SearchBar from "../components/SearchBar"
 import TopPlayerCard from "../components/TopPlayerCard"
 import PlayerSearchCard from "../components/PlayerSearchCard"
 import TeamRankingsTable from "../components/TeamRankingsTable"
+import MatchupRankingsTable from "../components/MatchupRankingsTable"
+import LiveScoreboard from "../components/LiveScoreboard"
+import Last10Leaders from "../components/Last10Leaders"
+import HistoryPanel from "../components/HistoryPanel"
 
-type Tab = "players" | "teams"
+type Tab = "players" | "teams" | "matchups" | "history"
 
 function subscribeToSession(callback: () => void) {
   window.addEventListener("storage", callback)
@@ -40,10 +51,24 @@ export default function DashboardPage() {
   const [teamsError, setTeamsError] = useState<string | null>(null)
   const [teamsLoading, setTeamsLoading] = useState(true)
 
+  const [matchups, setMatchups] =
+    useState<MatchupRankingsResponse | null>(null)
+  const [matchupsError, setMatchupsError] = useState<string | null>(null)
+  const [matchupsLoading, setMatchupsLoading] = useState(true)
+
+  const [hot, setHot] = useState<HotLeadersResponse | null>(null)
+  const [hotLoading, setHotLoading] = useState(true)
+
+  const [history, setHistory] = useState<HistoryResponse | null>(null)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+
   const [query, setQuery] = useState("")
   const [search, setSearch] = useState<SearchResponse | null>(null)
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
+
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   useEffect(() => {
     if (!user) {
@@ -71,7 +96,56 @@ export default function DashboardPage() {
         )
       )
       .finally(() => setTeamsLoading(false))
+
+    fetchMatchupRankings()
+      .then(setMatchups)
+      .catch(() =>
+        setMatchupsError(
+          "Could not load matchup rankings. Make sure the backend is running."
+        )
+      )
+      .finally(() => setMatchupsLoading(false))
+
+    fetchHotLeaders()
+      .then(setHot)
+      .catch(() => setHot(null))
+      .finally(() => setHotLoading(false))
+
+    setLastUpdated(new Date())
   }, [user])
+
+  // Keep the board fresh: every 3 minutes, silently re-pull the scored data
+  // (matching the backend's ~4-minute recompute) without flashing the loading
+  // skeletons. The live scoreboard refreshes itself faster, on its own timer.
+  useEffect(() => {
+    if (!user) return
+    const refresh = () => {
+      invalidateDashboardCache()
+      fetchTopPlayers().then(setScores).catch(() => {})
+      fetchTeamRankings().then(setTeams).catch(() => {})
+      fetchMatchupRankings().then(setMatchups).catch(() => {})
+      fetchHotLeaders().then(setHot).catch(() => {})
+      setLastUpdated(new Date())
+    }
+    const id = setInterval(refresh, 180_000)
+    return () => clearInterval(id)
+  }, [user])
+
+  // Load historical results lazily whenever the tab is opened, so it always
+  // reflects the latest state of the spreadsheet.
+  useEffect(() => {
+    if (!user || tab !== "history") return
+    setHistoryLoading(true)
+    setHistoryError(null)
+    fetchHistory()
+      .then(setHistory)
+      .catch(() =>
+        setHistoryError(
+          "Could not read the tracker. Make sure the backend is running and tracker4.xlsx is in the project root (close it in Excel if it's open)."
+        )
+      )
+      .finally(() => setHistoryLoading(false))
+  }, [user, tab])
 
   const handleSearch = useCallback((q: string) => {
     setQuery(q)
@@ -156,6 +230,15 @@ export default function DashboardPage() {
             <p className="text-sm text-gray-400 mt-0.5">
               Top 25 projected hitters and team rankings
               {scores ? ` · ${scores.date}` : ""}
+              {lastUpdated && (
+                <span className="text-gray-300">
+                  {" · "}updated{" "}
+                  {lastUpdated.toLocaleTimeString([], {
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </span>
+              )}
             </p>
             <div className="flex gap-2 mt-4">
               <button
@@ -180,45 +263,84 @@ export default function DashboardPage() {
               >
                 Team rankings
               </button>
+              <button
+                type="button"
+                onClick={() => setTab("matchups")}
+                className={`text-xs font-medium rounded-full px-4 py-1.5 border transition-colors ${
+                  tab === "matchups"
+                    ? "bg-gray-900 text-white border-gray-900"
+                    : "bg-white text-gray-500 border-gray-200 hover:border-gray-400"
+                }`}
+              >
+                Matchup rankings
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab("history")}
+                className={`text-xs font-medium rounded-full px-4 py-1.5 border transition-colors ${
+                  tab === "history"
+                    ? "bg-gray-900 text-white border-gray-900"
+                    : "bg-white text-gray-500 border-gray-200 hover:border-gray-400"
+                }`}
+              >
+                Historical results
+              </button>
             </div>
           </div>
 
-          <div className="px-6 py-6 max-w-4xl mx-auto">
+          <div className="px-6 py-6 max-w-6xl mx-auto">
             {tab === "players" && (
-              <>
-                {scoresLoading && (
-                  <div className="space-y-3">
-                    {Array.from({ length: 6 }).map((_, i) => (
-                      <div
-                        key={i}
-                        className="h-24 bg-white border border-gray-100 rounded-xl animate-pulse"
-                      />
-                    ))}
-                  </div>
-                )}
-                {scoresError && (
-                  <p className="text-sm text-red-500 bg-white border border-red-100 rounded-xl p-6 text-center">
-                    {scoresError}
-                  </p>
-                )}
-                {!scoresLoading && !scoresError && scores && (
-                  scores.top_25.length === 0 ? (
-                    <p className="text-sm text-gray-400 bg-white border border-gray-100 rounded-xl p-6 text-center">
-                      No projections yet — there may be no games today.
-                    </p>
-                  ) : (
+              <div className="flex flex-col lg:flex-row gap-6">
+                <div className="flex-1 min-w-0">
+                  <LiveScoreboard />
+                  {scoresLoading && (
                     <div className="space-y-3">
-                      {scores.top_25.map((player, index) => (
-                        <TopPlayerCard
-                          key={`${player.player_id}-${player.pitcher_id}`}
-                          player={player}
-                          rank={index + 1}
+                      {Array.from({ length: 6 }).map((_, i) => (
+                        <div
+                          key={i}
+                          className="h-24 bg-white border border-gray-100 rounded-xl animate-pulse"
                         />
                       ))}
                     </div>
-                  )
-                )}
-              </>
+                  )}
+                  {scoresError && (
+                    <p className="text-sm text-red-500 bg-white border border-red-100 rounded-xl p-6 text-center">
+                      {scoresError}
+                    </p>
+                  )}
+                  {!scoresLoading && !scoresError && scores && (
+                    scores.top_25.length === 0 ? (
+                      <p className="text-sm text-gray-400 bg-white border border-gray-100 rounded-xl p-6 text-center">
+                        No projections yet — there may be no games today.
+                      </p>
+                    ) : (
+                      (() => {
+                        const boardScores = scores.top_25.map(
+                          (p) => p.total_score ?? p.pre_h2h_score
+                        )
+                        const scoreMin = Math.min(...boardScores)
+                        const scoreMax = Math.max(...boardScores)
+                        return (
+                          <div className="space-y-3">
+                            {scores.top_25.map((player, index) => (
+                              <TopPlayerCard
+                                key={`${player.player_id}-${player.pitcher_id}-${player.game_number ?? 1}`}
+                                player={player}
+                                rank={index + 1}
+                                scoreMin={scoreMin}
+                                scoreMax={scoreMax}
+                              />
+                            ))}
+                          </div>
+                        )
+                      })()
+                    )
+                  )}
+                </div>
+                <aside className="lg:w-72 shrink-0">
+                  <Last10Leaders data={hot} loading={hotLoading} />
+                </aside>
+              </div>
             )}
 
             {tab === "teams" && (
@@ -241,6 +363,38 @@ export default function DashboardPage() {
                   </>
                 )}
               </>
+            )}
+
+            {tab === "matchups" && (
+              <>
+                {matchupsLoading && (
+                  <div className="h-64 bg-white border border-gray-100 rounded-xl animate-pulse" />
+                )}
+                {matchupsError && (
+                  <p className="text-sm text-red-500 bg-white border border-red-100 rounded-xl p-6 text-center">
+                    {matchupsError}
+                  </p>
+                )}
+                {!matchupsLoading && !matchupsError && matchups && (
+                  <>
+                    <p className="text-xs text-gray-400 mb-3">
+                      Games ranked by the average model score of every projected
+                      hitter in the matchup — both lineups pooled. A higher
+                      number means both offenses project well, a quick signal for
+                      game totals and game-line value.
+                    </p>
+                    <MatchupRankingsTable rankings={matchups.rankings} />
+                  </>
+                )}
+              </>
+            )}
+
+            {tab === "history" && (
+              <HistoryPanel
+                data={history}
+                loading={historyLoading}
+                error={historyError}
+              />
             )}
           </div>
         </>

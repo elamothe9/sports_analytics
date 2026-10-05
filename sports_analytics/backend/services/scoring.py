@@ -122,6 +122,7 @@ def fetch_all_season_stats(year: int) -> list:
             "avg": float(stat.get("avg", 0) or 0),
             "ops": float(stat.get("ops", 0) or 0),
             "hr": int(stat.get("homeRuns", 0) or 0),
+            "ab": int(stat.get("atBats", 0) or 0),
             "pa": pa,
             "bats": bats,
         })
@@ -142,6 +143,7 @@ def fetch_all_10day_stats(year: int) -> list:
         "playerPool": "ALL",
         "limit": 500,
         "sportId": 1,
+        "hydrate": "person",             # so fullName is available for leaders
     }
     res = requests.get(url, params=params)
     res.raise_for_status()
@@ -152,13 +154,64 @@ def fetch_all_10day_stats(year: int) -> list:
         pa = int(stat.get("plateAppearances", 0) or 0)
         if pa < 30:                      # UPDATED threshold
             continue
+        person = entry.get("player", {})
         players.append({
-            "player_id": entry["player"]["id"],
+            "player_id": person["id"],
+            "name": person.get("fullName"),      # ADDED for hot-leaders panel
+            "team_id": entry.get("team", {}).get("id"),
             "avg": float(stat.get("avg", 0) or 0),
             "ops": float(stat.get("ops", 0) or 0),
+            "hr": int(stat.get("homeRuns", 0) or 0),  # ADDED for HR leader
+            "ab": int(stat.get("atBats", 0) or 0),
             "pa": pa,                    # ADDED for transparency
         })
     return players
+
+
+@ttl_cache(seconds=30 * 60)
+def fetch_batter_recent_games(player_id: int, year: int, days: int = 10) -> list:
+    """
+    Per-game hitting lines over the last `days` days (oldest -> newest), with the
+    raw components needed to build a running AVG / OPS / HR trend for the
+    hot-hitters sparklines.
+    """
+    try:
+        url = f"{MLB_API_BASE}/people/{player_id}/stats"
+        params = {"stats": "gameLog", "group": "hitting", "season": year}
+        res = requests.get(url, params=params, timeout=10)
+        res.raise_for_status()
+        splits = res.json().get("stats", [{}])[0].get("splits", [])
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        games = []
+        for s in splits:
+            date = s.get("date", "")
+            if date < cutoff:
+                continue
+            st = s.get("stat", {})
+            ab = int(st.get("atBats", 0) or 0)
+            pa = int(st.get("plateAppearances", 0) or 0)
+            if ab == 0 and pa == 0:
+                continue
+            hits = int(st.get("hits", 0) or 0)
+            doubles = int(st.get("doubles", 0) or 0)
+            triples = int(st.get("triples", 0) or 0)
+            hr = int(st.get("homeRuns", 0) or 0)
+            tb_raw = st.get("totalBases")
+            tb = int(tb_raw) if tb_raw not in (None, "") else \
+                hits + doubles + 2 * triples + 3 * hr
+            games.append({
+                "date": date, "ab": ab, "hits": hits, "hr": hr,
+                "bb": int(st.get("baseOnBalls", 0) or 0),
+                "hbp": int(st.get("hitByPitch", 0) or 0),
+                "sf": int(st.get("sacFlies", 0) or 0),
+                "tb": tb,
+            })
+        games.sort(key=lambda g: g["date"])
+        print(games)
+        return games
+    except Exception as e:
+        print(f"recent games fetch failed for {player_id}: {e}")
+        return []
 
 
 @ttl_cache(seconds=15 * 60)
@@ -181,7 +234,7 @@ def fetch_splits(player_id: int, year: int) -> dict:
     res = requests.get(url, params=params)
     res.raise_for_status()
     splits = res.json().get("stats", [{}])[0].get("splits", [])
-    result = {"vs_lhp": {"avg": 0.0, "ops": 0.0}, "vs_rhp": {"avg": 0.0, "ops": 0.0}}
+    result = {"vs_lhp": {"avg": 0.0, "ops": 0.0, "hr": 0, "ab": 0}, "vs_rhp": {"avg": 0.0, "ops": 0.0, "hr": 0, "ab": 0}}
     for s in splits:
         stat = s["stat"]
         code = s.get("split", {}).get("code", "")
@@ -189,14 +242,20 @@ def fetch_splits(player_id: int, year: int) -> dict:
         result[key] = {
             "avg": float(stat.get("avg", 0) or 0),
             "ops": float(stat.get("ops", 0) or 0),
+            # MLB stats API uses camelCase: homeRuns / atBats (not hr / ab).
+            "hr": int(stat.get("homeRuns", 0) or 0),
+            "ab": int(stat.get("atBats", 0) or 0),
         }
     return result
 
 
+@ttl_cache(seconds=15 * 60)
 def fetch_h2h(batter_id: int, pitcher_id: int) -> dict:
     """
     Fetch career batter vs pitcher head-to-head stats.
-    Uses cached Statcast data to avoid repeated slow fetches.
+    Uses cached Statcast data to avoid repeated slow fetches, and memoizes the
+    computed result per (batter, pitcher) so scoring the whole slate doesn't
+    re-run the same pandas pass every time the board is rebuilt.
     """
     try:
         df = get_statcast_batter_cached(batter_id)
@@ -204,13 +263,11 @@ def fetch_h2h(batter_id: int, pitcher_id: int) -> dict:
         if df.empty:
             return {"avg": None, "ops": None, "pa": 0}
 
-        # Cast pitcher column to int regardless of source type
-        # Statcast stores pitcher IDs as object/string in some versions
-        df = df.copy()
-        df["pitcher"] = pd.to_numeric(
-            df["pitcher"], errors="coerce"
-        ).astype("Int64")
-        filtered = df[df["pitcher"] == int(pitcher_id)]
+        # Compare the pitcher column numerically without copying the whole
+        # frame or mutating the cached DataFrame. Statcast stores pitcher IDs as
+        # object/string in some versions, so coerce just this column in place.
+        pitcher_col = pd.to_numeric(df["pitcher"], errors="coerce")
+        filtered = df[pitcher_col == int(pitcher_id)]
 
         if filtered.empty:
             return {"avg": None, "ops": None, "pa": 0}
@@ -419,6 +476,20 @@ def fetch_todays_games() -> list:
             away = game["teams"]["away"]
             games.append({
                 "game_id": game["gamePk"],
+                # gameNumber is 1 for a single game, 1/2 for a double-header;
+                # doubleHeader is "N" (none), "Y" (traditional) or "S" (split).
+                "game_number": int(game.get("gameNumber", 1) or 1),
+                "doubleheader": game.get("doubleHeader", "N") != "N",
+                # UTC ISO first-pitch time (e.g. '2026-08-31T23:05:00Z') — used
+                # to pull the gametime weather forecast rather than current
+                # conditions.
+                "game_date": game.get("gameDate"),
+                # Live status: abstractGameState is Preview / Live / Final;
+                # detailedState is the granular label (Scheduled, In Progress,
+                # Final, Postponed, ...). Used to show game time / "started" on
+                # the board without a second request.
+                "status": game.get("status", {}).get("detailedState"),
+                "abstract_state": game.get("status", {}).get("abstractGameState"),
                 "venue": venue,
                 "home_team_id": home["team"]["id"],
                 "home_team_name": home["team"]["name"],
@@ -436,6 +507,51 @@ def fetch_todays_games() -> list:
         for p in (g["home_probable_pitcher"], g["away_probable_pitcher"])
     ])
     return games
+
+
+@ttl_cache(seconds=30)
+def fetch_live_scoreboard() -> list:
+    """
+    Compact live view of today's games for the scoreboard strip: score, inning
+    and status for each game. Cached only 30s so in-progress scores stay fresh,
+    separate from the 5-minute schedule cache the board relies on.
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    url = f"{MLB_API_BASE}/schedule"
+    params = {"sportId": 1, "date": today, "hydrate": "linescore,team"}
+    res = requests.get(url, params=params, timeout=10)
+    res.raise_for_status()
+    data = res.json()
+
+    out = []
+    for date in data.get("dates", []):
+        for g in date.get("games", []):
+            ls = g.get("linescore", {}) or {}
+            ls_teams = ls.get("teams", {}) or {}
+            home = g["teams"]["home"]
+            away = g["teams"]["away"]
+            status = g.get("status", {})
+            out.append({
+                "game_id": g["gamePk"],
+                "game_number": int(g.get("gameNumber", 1) or 1),
+                "game_date": g.get("gameDate"),
+                "status": status.get("detailedState"),
+                # Preview (not started) / Live (in progress) / Final.
+                "abstract_state": status.get("abstractGameState"),
+                "inning": ls.get("currentInning"),
+                "inning_state": ls.get("inningState"),  # Top/Middle/Bottom/End
+                "away_name": away["team"]["name"],
+                "home_name": home["team"]["name"],
+                "away_abbr": away["team"].get("abbreviation"),
+                "home_abbr": home["team"].get("abbreviation"),
+                "away_runs": (ls_teams.get("away", {}) or {}).get("runs"),
+                "home_runs": (ls_teams.get("home", {}) or {}).get("runs"),
+            })
+    # Order: live games first, then upcoming, then finals; by start time within.
+    order = {"Live": 0, "Preview": 1, "Final": 2}
+    out.sort(key=lambda x: (order.get(x.get("abstract_state"), 3),
+                            x.get("game_date") or ""))
+    return out
 
 
 @ttl_cache(seconds=24 * 60 * 60)

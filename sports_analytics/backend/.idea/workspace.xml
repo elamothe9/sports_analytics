@@ -4,22 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="7f46c11e-2067-4f86-8653-519303a3d366" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/../.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/../.gitignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/../README.md" beforeDir="false" afterPath="$PROJECT_DIR$/../README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/routers/scores.py" beforeDir="false" afterPath="$PROJECT_DIR$/routers/scores.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/scoring.py" beforeDir="false" afterPath="$PROJECT_DIR$/services/scoring.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/services/weather.py" beforeDir="false" afterPath="$PROJECT_DIR$/services/weather.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/../frontend/app/components/PlayerCard.tsx" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/../frontend/app/components/Sparkline.tsx" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/../frontend/app/layout.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/../frontend/app/layout.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/../frontend/app/page.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/../frontend/app/page.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/../frontend/app/player/[id]/page.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/../frontend/app/player/[id]/page.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/../frontend/package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/../frontend/package-lock.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/../frontend/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/../frontend/package.json" afterDir="false" />
-    </list>
+    <list default="true" id="7f46c11e-2067-4f86-8653-519303a3d366" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -43,20 +28,20 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;RunOnceActivity.OpenProjectViewOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;WebServerToolWindowFactoryState&quot;: &quot;false&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;fa7c8fcc&quot;,
-    &quot;last_opened_file_path&quot;: &quot;C:/Users/evanl/dataannotation/worker_tools/sports_analytics/.etalon/golden/workspace/backend&quot;,
-    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
-    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
-    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
-    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
-    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "RunOnceActivity.OpenProjectViewOnStart": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "WebServerToolWindowFactoryState": "false",
+    "git-widget-placeholder": "fa7c8fcc",
+    "last_opened_file_path": "C:/Users/evanl/sports_analytics/backend",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "vue.rearranger.settings.migration": "true"
   }
-}</component>
+}]]></component>
   <component name="RunManager">
     <configuration name="main" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
       <module name="backend" />
@@ -101,6 +86,13 @@
       <workItem from="1786804804180" duration="916000" />
       <workItem from="1786805738458" duration="817000" />
       <workItem from="1786806580756" duration="809000" />
+      <workItem from="1788206809955" duration="1891000" />
+      <workItem from="1788453365361" duration="589000" />
+      <workItem from="1788887670679" duration="1680000" />
+      <workItem from="1789058099035" duration="23000" />
+      <workItem from="1789091302352" duration="1214000" />
+      <workItem from="1789490092389" duration="60000" />
+      <workItem from="1790777657583" duration="111000" />
     </task>
     <servers />
   </component>
@@ -112,7 +104,7 @@
       <breakpoints>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/daily_props_tracker.py</url>
-          <line>57</line>
+          <line>63</line>
           <option name="timeStamp" value="1" />
         </line-breakpoint>
       </breakpoints>

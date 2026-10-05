@@ -39,7 +39,7 @@ import openpyxl
 # The live tracker lives in the repo root (one level up from backend/).
 # Resolved relative to this file so it works from any working directory.
 TRACKER_PATH = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tracker4.xlsx")
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tk.xlsx")
 )
 SHEET_NAME   = "Props Tracker"
 MLB_API_BASE = "https://statsapi.mlb.com/api/v1"

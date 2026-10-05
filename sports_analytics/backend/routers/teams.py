@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from routers.scores import compute_fast_scores
+from routers.scores import compute_full_scores
 from datetime import datetime
 
 router = APIRouter()
@@ -9,12 +9,14 @@ router = APIRouter()
 def team_rankings():
     """
     Rank today's teams by the average model score of their projected
-    hitters — a quick signal for moneyline shopping.
+    hitters — a quick signal for moneyline shopping. Uses the same fully-scored
+    total (real H2H, splits and bonuses) as the Top 25 board so a player's
+    score is identical across every tab.
     """
     try:
-        fast = compute_fast_scores()
-        games = fast["games"]
-        all_players = fast["all_players"]
+        full = compute_full_scores()
+        games = full["games"]
+        all_players = full["all_players"]
 
         team_info = {}
         for game in games:
@@ -32,14 +34,30 @@ def team_rankings():
             }
 
         team_scores: dict = {}
+        team_players: dict = {}
+        # Dedupe by player: on a double-header a hitter appears once per game,
+        # which would otherwise double every count and the roster list.
+        seen_players: set = set()
         for player in all_players:
-            team_scores.setdefault(player["team"], []).append(
-                player["pre_h2h_score"]
-            )
+            if player["player_id"] in seen_players:
+                continue
+            seen_players.add(player["player_id"])
+            score = player.get("total_score", player["pre_h2h_score"])
+            team_scores.setdefault(player["team"], []).append(score)
+            team_players.setdefault(player["team"], []).append({
+                "player_id": player["player_id"],
+                "name": player["name"],
+                "score": score,
+            })
 
         rankings = []
         for team_name, scores in team_scores.items():
             info = team_info.get(team_name, {})
+            players = sorted(
+                team_players.get(team_name, []),
+                key=lambda p: p["score"],
+                reverse=True,
+            )
             rankings.append({
                 "team_id": info.get("team_id"),
                 "team_name": team_name,
@@ -48,6 +66,7 @@ def team_rankings():
                 "side": info.get("side"),
                 "avg_score": round(sum(scores) / len(scores), 2),
                 "player_count": len(scores),
+                "players": players,
             })
 
         rankings.sort(key=lambda x: x["avg_score"], reverse=True)

@@ -28,12 +28,18 @@ export default function MetricsPanel({ card }: { card: PlayerCardData }) {
             Last 10 days
           </p>
           {card.last_10 ? (
-            <div className="flex gap-4">
+            <div className="flex gap-4 flex-wrap">
               <span className="text-gray-700">
                 AVG <span className="font-semibold">{fmt(card.last_10.avg)}</span>
               </span>
               <span className="text-gray-700">
                 OPS <span className="font-semibold">{fmt(card.last_10.ops)}</span>
+              </span>
+              <span className="text-gray-700">
+                HR <span className="font-semibold">{fmt(card.last_10.hr, 0)}</span>
+              </span>
+              <span className="text-gray-700">
+                AB <span className="font-semibold">{fmt(card.last_10.ab, 0)}</span>
               </span>
             </div>
           ) : (
@@ -54,6 +60,9 @@ export default function MetricsPanel({ card }: { card: PlayerCardData }) {
             </span>
             <span className="text-gray-700">
               HR <span className="font-semibold">{card.season.hr}</span>
+            </span>
+            <span className="text-gray-700">
+              AB <span className="font-semibold">{fmt(card.season.ab, 0)}</span>
             </span>
           </div>
         </div>
@@ -79,6 +88,10 @@ export default function MetricsPanel({ card }: { card: PlayerCardData }) {
                 AVG <span className="font-semibold">{fmt(card.splits.vs_lhp.avg)}</span>
                 {"  ·  "}
                 OPS <span className="font-semibold">{fmt(card.splits.vs_lhp.ops)}</span>
+                {"  ·  "}
+                HR <span className="font-semibold">{fmt(card.splits.vs_lhp.hr, 0)}</span>
+                {"  ·  "}
+                AB <span className="font-semibold">{fmt(card.splits.vs_lhp.ab, 0)}</span>
               </p>
             </div>
             <div
@@ -95,6 +108,10 @@ export default function MetricsPanel({ card }: { card: PlayerCardData }) {
                 AVG <span className="font-semibold">{fmt(card.splits.vs_rhp.avg)}</span>
                 {"  ·  "}
                 OPS <span className="font-semibold">{fmt(card.splits.vs_rhp.ops)}</span>
+                {"  ·  "}
+                HR <span className="font-semibold">{fmt(card.splits.vs_rhp.hr, 0)}</span>
+                {"  ·  "}
+                AB <span className="font-semibold">{fmt(card.splits.vs_rhp.ab, 0)}</span>
               </p>
             </div>
           </div>
@@ -130,6 +147,25 @@ export default function MetricsPanel({ card }: { card: PlayerCardData }) {
               <p className="text-[11px] text-amber-600">{today.h2h_note}</p>
             )}
           </div>
+
+          {today.active_bonuses && today.active_bonuses.length > 0 && (
+            <div>
+              <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1.5">
+                Bonuses activated
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {today.active_bonuses.map((b) => (
+                  <span
+                    key={b.key}
+                    className="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-medium px-2 py-0.5"
+                  >
+                    {b.label}
+                    <span className="text-amber-500">+{b.points}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="space-y-1.5">
             {Object.entries(CORE_MAX).map(([key, meta]) => {

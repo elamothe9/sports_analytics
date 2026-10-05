@@ -58,6 +58,7 @@ def _todays_matchup_for_team(team_id: int) -> dict | None:
         return {
             "side": side,
             "venue": game["venue"],
+            "game_date": game.get("game_date"),
             "opp_team_id": opp_id,
             "opp_team_name": opp_name,
             "opp_pitcher": opp_pitcher,
@@ -85,6 +86,7 @@ def build_player_card(player: dict, shared: dict) -> dict:
             "avg": player["avg"],
             "ops": player["ops"],
             "hr": player["hr"],
+            "ab": player.get("ab"),
             "pa": player["pa"],
         },
         "last_10": None,
@@ -100,6 +102,8 @@ def build_player_card(player: dict, shared: dict) -> dict:
             "avg": ten_day["avg"],
             "ops": ten_day["ops"],
             "pa": ten_day.get("pa"),
+            "hr": ten_day.get("hr"),
+            "ab": ten_day.get("ab"),
         }
 
     try:
@@ -118,7 +122,7 @@ def build_player_card(player: dict, shared: dict) -> dict:
             batter_hand = "L" if pitcher_hand == "R" else "R"
 
         try:
-            weather = get_weather_for_venue(matchup["venue"])
+            weather = get_weather_for_venue(matchup["venue"], matchup.get("game_date"))
             h2h = fetch_h2h(pid, pitcher_id)
             bonus_inputs = gather_bonus_inputs(
                 pid, pitcher_id, matchup["venue"], batter_hand, year

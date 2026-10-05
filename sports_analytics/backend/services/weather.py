@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import requests
 
 from services.cache import ttl_cache
@@ -47,11 +49,33 @@ INDOOR_VENUES = {
 }
 
 
-@ttl_cache(seconds=10 * 60)
-def get_weather_for_venue(venue: str) -> dict:
+def _parse_game_time(game_time) -> "datetime | None":
     """
-    Fetch current weather at a venue using Open-Meteo.
-    Returns neutral weather for indoor stadiums.
+    Parse an MLB gameDate (UTC ISO 8601, e.g. '2026-08-31T23:05:00Z') into a
+    naive UTC datetime. Returns None if it can't be parsed.
+    """
+    if not game_time:
+        return None
+    try:
+        text = str(game_time).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+@ttl_cache(seconds=10 * 60)
+def get_weather_for_venue(venue: str, game_time=None) -> dict:
+    """
+    Fetch weather at a venue using Open-Meteo.
+
+    When ``game_time`` is provided (an MLB gameDate UTC ISO string), returns the
+    hourly forecast for the hour nearest first pitch, so a score computed hours
+    ahead reflects the conditions the game will actually be played in rather than
+    whatever it happens to be right now. Falls back to current conditions when no
+    game time is available, and returns neutral weather for indoor stadiums.
     """
     if venue in INDOOR_VENUES:
         return {
@@ -70,8 +94,38 @@ def get_weather_for_venue(venue: str) -> dict:
             "indoor": False,
         }
 
+    target = _parse_game_time(game_time)
+
     try:
         url = "https://api.open-meteo.com/v1/forecast"
+
+        if target is not None:
+            # Forecast for the hour nearest first pitch.
+            params = {
+                "latitude": coords["lat"],
+                "longitude": coords["lon"],
+                "hourly": "temperature_2m,wind_speed_10m,wind_direction_10m",
+                "temperature_unit": "fahrenheit",
+                "wind_speed_unit": "mph",
+                "timezone": "UTC",
+                "forecast_days": 3,
+            }
+            res = requests.get(url, params=params, timeout=5)
+            res.raise_for_status()
+            hourly = res.json()["hourly"]
+
+            times = hourly["time"]  # e.g. '2026-08-31T23:00' (UTC, naive)
+            idx = _nearest_hour_index(times, target)
+            if idx is not None:
+                wind_deg = _safe_at(hourly.get("wind_direction_10m"), idx, 0)
+                return {
+                    "temp_f": round(_safe_at(hourly["temperature_2m"], idx, 72), 1),
+                    "wind_speed": round(_safe_at(hourly["wind_speed_10m"], idx, 0), 1),
+                    "wind_direction": degrees_to_direction(wind_deg),
+                    "indoor": False,
+                }
+            # If we couldn't line up the hour, fall through to current weather.
+
         params = {
             "latitude": coords["lat"],
             "longitude": coords["lon"],
@@ -100,6 +154,34 @@ def get_weather_for_venue(venue: str) -> dict:
             "wind_direction": "calm",
             "indoor": False,
         }
+
+
+def _safe_at(seq, idx, default):
+    """Return seq[idx] if it's a usable number, else default."""
+    try:
+        val = seq[idx]
+        return default if val is None else val
+    except Exception:
+        return default
+
+
+def _nearest_hour_index(times, target: datetime):
+    """
+    Given Open-Meteo hourly 'time' strings (naive UTC, on the hour) and a naive
+    UTC target datetime, return the index of the closest hour. None if empty.
+    """
+    best_idx = None
+    best_delta = None
+    for i, t in enumerate(times):
+        try:
+            dt = datetime.fromisoformat(t)
+        except Exception:
+            continue
+        delta = abs((dt - target).total_seconds())
+        if best_delta is None or delta < best_delta:
+            best_delta = delta
+            best_idx = i
+    return best_idx
 
 
 def degrees_to_direction(degrees: float) -> str:
